@@ -1,0 +1,684 @@
+createOrReplace
+
+	ref table 度量值：会员行为指标
+
+		measure 8年LTV = ```
+				VAR AvgOrderValue = [客单价]
+				VAR AnnualPurchases = [年均消费次数]
+				VAR RetentionYears = [留存年限]
+				RETURN
+				IF(
+				    ISBLANK(AvgOrderValue) || AnnualPurchases <=0 || RetentionYears <=0, 
+				    0,  -- 排除无效数据
+				    ROUND(AvgOrderValue * AnnualPurchases * RetentionYears, 2)
+				)
+				```
+			lineageTag: ddbded84-f89c-44d0-b1dc-22a4cdc1499e
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 当前活跃会员数_30天内有消费 =
+				
+				VAR EndDate = MAX('日期表'[Date])  // 用户选择的截止日期
+				VAR StartDate = EndDate - 30      // 动态计算起始日期
+				RETURN
+				CALCULATE(
+				    DISTINCTCOUNT('会员消费报表'[卡号]),
+				    DATESBETWEEN(
+				        '日期表'[Date],
+				        StartDate,
+				        EndDate
+				    )
+				)
+			formatString: 0.00
+			displayFolder: 活跃流失分析
+			lineageTag: 46a89ef7-b70a-4d5b-aa58-8ec9a3820dfe
+
+		measure 订单数量 = COUNTROWS('会员消费报表')
+			formatString: 0
+			lineageTag: 93aea525-29b7-49bb-b628-9b84f5f174a2
+
+		measure 度量值
+			lineageTag: 368ab24d-b78f-41ab-af96-4719ded4a092
+
+			annotation 43dbc3e8-3a1c-4b6f-9923-b49ff7d6691c = True
+
+		measure 非活跃会员数 = [总会员数_累计]-[当前活跃会员数_30天内有消费]
+			formatString: 0
+			displayFolder: 活跃流失分析
+			lineageTag: 03ea9405-7157-4048-acec-4a57ede8e9ff
+
+		measure 环比增长 =
+				IF(
+				    ISBLANK([上月消费金额]),BLANK(),
+				    [消费总额]/[上月消费金额]-1)
+			formatString: 0.00%;-0.00%;0.00%
+			lineageTag: 5fefd5fb-6898-487e-ab6c-200d6c1fcef9
+
+		measure 会员活跃年数 = ```
+				
+				VAR MinDate = MIN('会员消费报表'[订单日期])
+				VAR MaxDate = MAX('会员消费报表'[订单日期])
+				VAR DaysActive = 
+				    IF(
+				        MinDate = MaxDate, 
+				        1,  -- 单次消费默认按1天计算
+				        MaxDate - MinDate
+				    )
+				RETURN
+				DIVIDE(DaysActive, 365, 0)
+				```
+			lineageTag: 9ba313c0-b085-4b4c-87f7-3b9e19c2f3e0
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 会员数量 = DISTINCTCOUNT('会员消费报表'[卡号])
+			formatString: 0
+			displayFolder: 会员数
+			lineageTag: 6116dbc3-7354-4958-98c2-9407b6e3c0b1
+
+		measure 客单价 = ```
+				
+				DIVIDE(
+				    [消费总额], 
+				    DISTINCTCOUNT('会员消费报表'[订单号])
+				)
+				```
+			lineageTag: 19f493b0-2753-46f1-81cc-bd6607eeb357
+
+			changedProperty = IsHidden
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 累计流失会员占比 = ```
+				DIVIDE([流失会员总数], [总会员数_累计], 0)
+				
+				```
+			formatString: 0.00%;-0.00%;0.00%
+			displayFolder: 活跃流失分析
+			lineageTag: bbbbd863-a071-4c58-b810-413290181e5d
+
+		measure 流失会员总数 = ```
+				
+				VAR EndDate = MAX('日期表'[Date])  // 当前日期
+				VAR NinetyDaysAgo = EndDate - 90  // 90天前的日期
+				
+				// 所有曾经消费过的会员
+				VAR AllHistoricalMembers = 
+				CALCULATETABLE(
+				    VALUES('会员消费报表'[卡号])
+				)
+				
+				// 最近90天内有消费的会员
+				VAR ActiveMembersLast90Days = 
+				CALCULATETABLE(
+				    VALUES('会员消费报表'[卡号]),
+				    '会员消费报表'[订单日期] >= NinetyDaysAgo && '会员消费报表'[订单日期] <= EndDate
+				)
+				
+				// 流失会员总数 = 所有曾经消费过的会员 - 90天内有消费的会员
+				RETURN
+				COUNTROWS(
+				    EXCEPT(
+				        AllHistoricalMembers,
+				        ActiveMembersLast90Days
+				    )
+				)
+				```
+			formatString: 0
+			displayFolder: 活跃流失分析
+			lineageTag: bb72124f-28ac-409e-86c1-a55d3739d1c7
+
+		measure 留存年限 = ```
+				
+				VAR days = TODAY() - [FRM:最后消费日期]
+				RETURN
+				IF(
+				    days > 2920, 
+				    8,  -- 如果超过365天没消费，视为至少留存5年
+				    DIVIDE([FRM:最后消费日期] - MIN('会员消费报表'[订单日期]), 365)
+				)
+				```
+			lineageTag: c85df3bb-e122-4729-8088-c696347e1902
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 年均消费次数 =
+				
+				IF(
+				    ISEMPTY('会员消费报表'),  -- 检查是否有消费记录
+				    0,
+				    DIVIDE(
+				        COUNTROWS('会员消费报表'),
+				        [会员活跃年数],
+				        0
+				    )
+				)
+			formatString: 0
+			lineageTag: 491fbcd9-92c9-41e6-ad9b-29cd1b06f257
+
+		measure 去年同比消费金额 =
+				CALCULATE(
+				    [消费总额],
+				    SAMEPERIODLASTYEAR('日期表'[date])
+				    )
+			lineageTag: ee769a35-0177-406d-ba34-c244ee159dfe
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 上月消费金额 = ```
+				
+				IF( 
+				    ISINSCOPE('日期表'[月份]),  -- 判断当前行是否为月份明细
+				   CALCULATE([消费总额],DATEADD('日期表'[date],-1,MONTH)), 
+				    BLANK() 
+				)
+				
+				```
+			lineageTag: ae5011a7-188f-49e9-8f02-b7bef3bcce78
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 同比增长 =
+				IF(
+				    ISBLANK([去年同比消费金额])||not ISINSCOPE('日期表'[月份]),
+				   BLANK(), [消费总额]/[去年同比消费金额]-1
+				)
+			formatString: 0.00%;-0.00%;0.00%
+			lineageTag: 760704a2-23eb-49fe-8b2e-4b5b9b816c00
+
+		measure 退单率 = [退单数]/[FRM:消费频次]
+			formatString: 0.00%;-0.00%;0.00%
+			lineageTag: 99196490-3f82-4a07-807a-e58986fd6c32
+
+		measure 退单数 =
+				CALCULATE(
+				    COUNTROWS('会员消费报表'),
+				    '会员消费报表'[订单类型]="退单")
+			formatString: 0
+			lineageTag: fa3f44b9-4134-44ef-a4d2-2b07c7f87085
+
+		measure 下单数 =
+				CALCULATE(
+				    COUNTROWS('会员消费报表'),
+				    '会员消费报表'[订单类型]="下单")
+			formatString: 0
+			lineageTag: 2eed9aa1-c231-4f20-ae7e-6766e8622210
+
+		measure 消费区间 =
+				
+				SWITCH(
+				    TRUE(),
+				    [消费总额] <= 1000, "0-1000元",
+				    [消费总额] <= 5000, "1001-5000元",
+				    [消费总额] <= 10000, "5001-10000元",
+				    "10000元以上"
+				)
+			lineageTag: 3db96c0f-ecf4-4a08-a5ad-8eac413095ac
+
+		measure 消费人数 = DISTINCTCOUNT('会员消费报表'[卡号])
+			formatString: 0
+			displayFolder: 会员数
+			lineageTag: 62354ba6-ede2-4e99-9e73-777251d5b90b
+
+		measure 消费占比 =
+				
+				DIVIDE(
+				    [消费总额],
+				    CALCULATE(
+				        [消费总额],
+				        ALLSELECTED('会员消费报表')
+				    ),
+				    0
+				)
+			formatString: 0.00%;-0.00%;0.00%
+			lineageTag: 283a4719-1c87-41a3-a253-870b908e8505
+
+		measure 消费总额 = SUM('会员消费报表'[消费金额])
+			formatString: 0.0
+			lineageTag: 0af09c69-e106-44b6-9c0d-c58bf198a54d
+
+		measure 新增会员数 =
+				
+				CALCULATE(
+				    COUNTROWS('会员信息查询'),
+				    FILTER(
+				        '会员信息查询',
+				        '会员信息查询'[注册时间] >= MIN('日期表'[Date]) &&
+				        '会员信息查询'[注册时间] <= MAX('日期表'[Date])
+				    )
+				)
+			formatString: 0
+			displayFolder: 会员数
+			lineageTag: 28e0a854-9ad6-4390-9b7f-27ac2216337f
+
+		measure 新增活跃会员数_30天内有消费 = ```
+				
+				VAR EndDate = MAX('日期表'[Date])  // 当前月末日期
+				VAR StartDate = EndDate - 30      // 当前活跃期开始日期
+				VAR PreviousEndDate = EndDate - 30  // 上一个活跃期结束日期
+				VAR PreviousStartDate = PreviousEndDate - 30  // 上一个活跃期开始日期
+				
+				// 当前活跃期内有消费的会员
+				VAR CurrentActiveMembers = 
+				CALCULATETABLE(
+				    VALUES('会员消费报表'[卡号]),
+				    '会员消费报表'[订单日期] >= StartDate && '会员消费报表'[订单日期] <= EndDate
+				)
+				
+				// 上一个活跃期内有消费的会员
+				VAR PreviousActiveMembers = 
+				CALCULATETABLE(
+				    VALUES('会员消费报表'[卡号]),
+				    '会员消费报表'[订单日期] >= PreviousStartDate && '会员消费报表'[订单日期] <= PreviousEndDate
+				)
+				
+				// 新增活跃会员 = 当前活跃会员 - 上一期也活跃的会员
+				RETURN
+				COUNTROWS(
+				    EXCEPT(
+				        CurrentActiveMembers,
+				        PreviousActiveMembers
+				    )
+				)
+				```
+			formatString: 0
+			displayFolder: 活跃流失分析
+			lineageTag: 43da0acf-a89d-4cee-be6b-18a0abe99c2d
+
+		measure 新增流失会员数_90天未消费 = ```
+				
+				VAR CurrentMonthDate = SELECTEDVALUE('日期表'[date], MAX('日期表'[Date]))
+				VAR CurrentMonthEnd = EOMONTH(CurrentMonthDate, 0)  // 当前月份的月末
+				VAR PreviousMonthEnd = EOMONTH(CurrentMonthDate, -1)  // 上个月的月末
+				
+				// 当月末流失会员（所有历史会员减去当月末前90天内活跃会员）
+				VAR CurrentMonthChurnedMembers = 
+				CALCULATETABLE(
+				    EXCEPT(
+				        CALCULATETABLE(VALUES('会员消费报表'[卡号]), ALL('日期表')),  // 忽略日期筛选获取所有历史会员
+				        CALCULATETABLE(
+				            VALUES('会员消费报表'[卡号]),
+				            REMOVEFILTERS('日期表'),  // 清除日期筛选
+				            '会员消费报表'[订单日期] > CurrentMonthEnd - 90 && '会员消费报表'[订单日期] <= CurrentMonthEnd
+				        )
+				    )
+				)
+				
+				// 上月末流失会员（所有历史会员减去上月末前90天内活跃会员）
+				VAR PreviousMonthChurnedMembers = 
+				CALCULATETABLE(
+				    EXCEPT(
+				        CALCULATETABLE(VALUES('会员消费报表'[卡号]), ALL('日期表')),  // 忽略日期筛选获取所有历史会员
+				        CALCULATETABLE(
+				            VALUES('会员消费报表'[卡号]),
+				            REMOVEFILTERS('日期表'),  // 清除日期筛选
+				            '会员消费报表'[订单日期] > PreviousMonthEnd - 90 && '会员消费报表'[订单日期] <= PreviousMonthEnd
+				        )
+				    )
+				)
+				
+				// 按月新增流失会员 = 当月末流失会员 - 上月末流失会员
+				RETURN
+				IF(
+				    MONTH(CurrentMonthDate) <> MONTH(TODAY()),  // 只在非当前月显示
+				    COUNTROWS(
+				        EXCEPT(
+				            CurrentMonthChurnedMembers,
+				            PreviousMonthChurnedMembers
+				        )
+				    )
+				)
+				```
+			formatString: 0
+			displayFolder: 活跃流失分析
+			lineageTag: ca1dc2f5-863c-4226-8034-5445838a4d4c
+
+		measure 有效会员数 = ```
+				
+				VAR CardsWithMultipleOrders = 
+				    FILTER(
+				        VALUES('会员信息查询'[会员卡号]),
+				        CALCULATE(COUNTROWS('会员消费报表')) >=1
+				    )
+				RETURN
+				COUNTROWS(CardsWithMultipleOrders)
+				```
+			formatString: 0
+			displayFolder: 会员数
+			lineageTag: 1a3b7d51-da17-41b6-8736-166270e5e940
+
+		measure 总会员数_累计 =
+				
+				VAR MaxDate = MAX('日期表'[Date])
+				RETURN
+				CALCULATE(
+				    COUNTROWS('会员信息查询'),
+				    '会员信息查询'[注册时间] <= MaxDate
+				)
+			formatString: 0.00
+			displayFolder: 会员数
+			lineageTag: 3f3d8071-7b89-4f94-ba45-94d88463300a
+
+		measure 总销售量 = SUM('会员消费报表'[消费数量])
+			formatString: 0
+			lineageTag: a8d215eb-a5e9-4439-be46-15129ed70580
+
+		measure 最后消费产品类型 = ```
+				
+				VAR LastDate1 = [FRM:最后消费日期]
+				VAR LastProducts = 
+				    CALCULATETABLE(
+				        VALUES('会员消费报表'[款号]),
+				        '会员消费报表'[订单日期] = LastDate1
+				    )
+				RETURN
+				    MINX(LastProducts, '会员消费报表'[款号])
+				```
+			lineageTag: 812c1ee6-b0c7-48da-8c86-2762d702df45
+
+	ref table 度量值：门店指标
+
+		measure 测试_订单数 = SUM('全国销售订单数量表'[全部订单数])
+			formatString: 0
+			lineageTag: b8e270db-0b8a-451a-bfdf-e9352d6064bb
+
+		measure 测试_天数 = COUNTROWS(FILTER(ALL('日期表'), '日期表'[Date] ))
+			formatString: 0
+			lineageTag: 104be5cc-50de-4e3a-9095-deda05064cd5
+
+		measure 会员订单数 = sum('全国销售订单数量表'[会员订单数])
+			formatString: 0
+			lineageTag: ff197e5f-4d5d-4104-bee5-96971d84f14b
+
+		measure 会员渗透率 =
+				
+				DIVIDE(
+				    SUM('全国销售订单数量表'[会员订单数]),
+				    SUM('全国销售订单数量表'[全部订单数]),
+				    0
+				)
+			formatString: 0.00%;-0.00%;0.00%
+			lineageTag: 5c0dc114-c291-47a0-a337-ac878767ddce
+
+		measure 连带率 =
+				
+				DIVIDE(
+				    SUM('会员消费报表'[消费数量]),
+				    DISTINCTCOUNT('会员消费报表'[订单号]),
+				    0
+				)
+			lineageTag: cf1e8c8a-6b3f-4476-b305-53811e1056b6
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 坪效 = ```
+				
+				DIVIDE(
+				    [消费总额],
+				    MIN('门店信息表'[仓储面积]),  // 添加聚合函数
+				    0
+				) 
+				```
+			lineageTag: 8d5b2b7b-22f6-4c8a-94aa-4063607fd994
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 全国订单数 = sum('全国销售订单数量表'[全部订单数])
+			formatString: 0
+			lineageTag: ddbf58b7-fc29-4d1f-b856-5b176855e325
+
+		measure 人均产值 = ```
+				
+				DIVIDE(
+				    [消费总额],
+				    MIN('门店信息表'[营业员数]),
+				    0
+				) 
+				```
+			lineageTag: 9bab70d3-7f5b-4b23-8a67-8046afc7d40e
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 日均交易频次 =
+				
+				DIVIDE(
+				    SUM('全国销售订单数量表'[全部订单数]),
+				    DISTINCTCOUNT('全国销售订单数量表'[年月]) * 30,
+				    0
+				)
+			formatString: 0
+			lineageTag: f9d3ae8b-b048-4b45-9d87-8ec29ce37dbd
+
+		measure 唯一店铺代码 = VALUES('门店信息表'[店铺代码])
+			lineageTag: 40c8423c-0c05-4775-8b3f-9f57ead92632
+
+		measure 员工人均销售额 =
+				
+				SUMX(    -- 逐行处理消费记录
+				    '会员消费报表',
+				    DIVIDE(
+				        [消费金额],
+				        RELATED('门店信息表'[营业员数])  -- 通过关系获取对应门店的员工数
+				    )
+				)
+			lineageTag: abebbdef-7b40-45e5-8c49-d525f61932ff
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 月均订单数 = ```
+				
+				VAR SelectedDates = 
+				    DATESBETWEEN(            -- 动态捕获切片器日期范围
+				        '日期表'[Date],
+				        MIN('日期表'[Date]),
+				        MAX('日期表'[Date])
+				    )
+				VAR TotalMonths = 
+				    DATEDIFF(                -- 精确计算月份跨度
+				        MINX(SelectedDates, [Date]),
+				        MAXX(SelectedDates, [Date]),
+				        MONTH
+				    ) + 1                   -- 包含首尾月份
+				RETURN
+				DIVIDE(
+				    CALCULATE(              -- 动态响应筛选上下文
+				        SUM('全国销售订单数量表'[全部订单数]),
+				        SelectedDates
+				    ),
+				    TotalMonths
+				)
+				```
+			lineageTag: 1c597cc0-8385-44be-8f21-f19023cbcd0f
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	ref table 度量值：全国销售指标
+
+		measure 当年累计订单 = CALCULATE(SUM('全国销售订单数量表'[全部订单数]), DATESYTD('日期表'[date]))
+			formatString: 0
+			lineageTag: bd5bca6a-76db-459c-8fd2-79d1a33965bc
+
+		measure 订单量环比 =
+				
+				VAR curmonth = SUM('全国销售订单数量表'[全部订单数])
+				VAR lastmonth = CALCULATE(SUM('全国销售订单数量表'[全部订单数]), DATEADD('日期表'[date], -1, MONTH))
+				RETURN
+				DIVIDE(curmonth - lastmonth, lastmonth, 0)
+			lineageTag: 82ebe8e6-5dd0-475e-a33d-593bfe8cc8a9
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure 订单量同比 = ```
+				DIVIDE([当年累计订单] -[去年累计订单], [去年累计订单], 0)
+				
+				```
+			formatString: 0.00%;-0.00%;0.00%
+			lineageTag: 7aa3e412-ade0-42ac-9fa9-ca1f955b40be
+
+		measure 去年累计订单 = CALCULATE(SUM('全国销售订单数量表'[全部订单数]), DATESYTD(SAMEPERIODLASTYEAR('日期表'[date])))
+			formatString: 0
+			lineageTag: 12c768b3-2c29-4493-ad8e-26f83017748e
+
+	ref table 度量值：RFM
+
+		measure 客户价值类型 = ```
+				
+				   VAR R = [R评分]
+				   VAR F = [F评分]
+				   VAR M = [M评分]
+				   RETURN
+				   SWITCH(
+				       TRUE(),
+				       R >= 4 && F >= 4 && M >= 4, "重要价值客户",
+				       R >= 4 && F >= 3 && M >= 3, "高价值客户",
+				       R >= 3 && F >= 3, "重点保持客户",
+				       R >= 4 && F <= 2, "重点发展客户", // 修改此条件
+				       R <= 3 && F >= 3, "重点挽留客户",
+				       R <= 2 && F <= 2 && M >= 4, "高消费低频客户",
+				       "一般价值客户"
+				   )
+				```
+			lineageTag: dab0a56b-8656-4e8c-9cb4-27d7aef9cd6e
+
+		measure F评分 = ```
+				
+				   VAR Fsorce = [F值_消费次数]
+				   RETURN
+				   SWITCH(
+				       TRUE(),
+				       Fsorce >= 5, 5,  
+				       Fsorce >= 3, 4,   
+				       Fsorce >= 2, 3,   
+				       Fsorce >= 1, 2,   
+				       1               
+				   )
+				```
+			formatString: 0
+			lineageTag: 974f608c-aefb-4deb-92d2-ffd1b5fa5110
+
+		measure F值_消费次数 = ```
+				
+				CALCULATE(
+				    DISTINCTCOUNT('会员消费报表'[订单号]),
+				    ALLEXCEPT('会员消费报表', '会员消费报表'[卡号])
+				)
+				
+				```
+			formatString: 0
+			lineageTag: 068b32eb-9e73-4c9a-975f-7c639317a211
+
+		measure FRM:会员价值分类 = ```
+				
+				   SWITCH(
+				       TRUE(),
+				       [RFM总分] >= 13, "重要价值客户",
+				       [RFM总分] >= 10, "高价值客户",
+				       [RFM总分] >= 7, "中价值客户",
+				       [RFM总分] >= 5, "低价值客户",
+				       "沉睡客户"
+				   )
+				```
+			lineageTag: 133b78e0-4a7d-44f2-a2dd-963a094df4eb
+
+		measure FRM:会员平均消费 = ```
+				
+				   DIVIDE(
+				       SUM('会员消费报表'[消费金额]),
+				       DISTINCTCOUNT('会员消费报表'[卡号])
+				   )
+				```
+			lineageTag: 1d08a06c-1d70-43af-942f-53c6bd0dcf7f
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure FRM:会员平均消费频次 = ```
+				
+				   DIVIDE(
+				       DISTINCTCOUNT('会员消费报表'[订单号]),
+				       DISTINCTCOUNT('会员消费报表'[卡号])
+				   )
+				```
+			lineageTag: be1e4dd3-c116-445e-b36e-ba01a1f09ae3
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure FRM:距今天数 = ```
+				
+				   DATEDIFF(
+				       [FRM:最后消费日期],
+				       [分析截止日期],
+				       DAY
+				   )
+				```
+			formatString: 0
+			lineageTag: 83ff34b5-d9c1-40fd-8a64-af915fe8b630
+
+		measure FRM:消费频次 = DISTINCTCOUNT('会员消费报表'[订单号])
+			formatString: 0
+			lineageTag: dd054e1a-1ff5-4920-b785-fdb9139356d9
+
+		measure FRM:最后消费日期 =
+				
+				CALCULATE(
+				    MAX('会员消费报表'[订单日期])
+				)
+			formatString: General Date
+			lineageTag: 076d5d48-9f9a-42f2-9a37-1d2eb1379323
+
+		measure M评分 =
+				
+				VAR Msorce = [M值_总消费金额]
+				RETURN
+				SWITCH(
+				    TRUE(),
+				    Msorce >= 3000, 5,  // 5000及以上消费给5分
+				    Msorce >= 1500, 4,  // 2000-4999消费给4分
+				    Msorce >= 800, 3,  // 1000-1999消费给3分
+				    Msorce >= 300, 2,   // 500-999消费给2分
+				    Msorce >= 0, 1      // 0-499消费给1分
+				)
+			formatString: 0
+			lineageTag: 388cbeca-b24f-46ac-a266-1e8390aefe9b
+
+		measure M值_总消费金额 =
+				
+				CALCULATE(
+				    SUM('会员消费报表'[消费金额]),
+				    ALLEXCEPT('会员消费报表', '会员消费报表'[卡号])
+				)
+			lineageTag: be87447a-d515-424e-8478-5e4e4d4db50d
+
+			annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+		measure R评分 = ```
+				
+				   VAR Rsorce = [R值_最后消费日期差]
+				   RETURN
+				   SWITCH(
+				       TRUE(),
+				       Rsorce <= 30, 5,   
+				       Rsorce <= 60, 4,  
+				       Rsorce <= 90, 3, 
+				       Rsorce <= 120, 2,  
+				       1               
+				   )
+				```
+			formatString: 0
+			lineageTag: 2ac0bd9e-35b4-4650-a61c-0b1d08535cbf
+
+		measure R值_最后消费日期差 =
+				
+				DATEDIFF([FRM:最后消费日期], [分析截止日期], DAY)
+			formatString: 0
+			lineageTag: d3e0952b-3a5a-4576-88ac-d6d8a5217891
+
+		measure RFM总分 = [R评分] + [F评分] + [M评分]
+			formatString: 0
+			lineageTag: 4a8f47e9-02a5-4bd2-afcf-5627678930ce
+
+		measure RFM组合 =
+				
+				FORMAT([R评分], "0") & FORMAT([F评分], "0") & FORMAT([M评分], "0")
+			lineageTag: fcee438c-466c-4067-b43e-14f1bb4eb26f
+
